@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -31,6 +32,30 @@ import (
 	"runic/internal/metrics"
 	"runic/internal/store"
 )
+
+// HTTPS listener deadlines. ReadHeaderTimeout and ReadTimeout bound clients
+// that stall mid-handshake or mid-request (slowloris), and IdleTimeout bounds
+// how long a keep-alive connection may sit unused. WriteTimeout is left at
+// zero: SSE and WebSocket responses stream for the lifetime of the connection,
+// so a global write deadline would sever them mid-stream.
+const (
+	serverReadHeaderTimeout = 10 * time.Second
+	serverReadTimeout       = 60 * time.Second
+	serverIdleTimeout       = 2 * time.Minute
+)
+
+// newHTTPServer builds the control-plane HTTPS server with bounded connection
+// deadlines.
+func newHTTPServer(addr string, handler http.Handler, tlsConfig *tls.Config) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		TLSConfig:         tlsConfig,
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		ReadTimeout:       serverReadTimeout,
+		IdleTimeout:       serverIdleTimeout,
+	}
+}
 
 func validateCertificate(certFile, keyFile string) error {
 	if _, err := os.Stat(certFile); os.IsNotExist(err) {
@@ -76,6 +101,49 @@ func validateCertificate(certFile, keyFile string) error {
 		"subject", cert.Subject.CommonName,
 		"expires", cert.NotAfter.Format(time.RFC3339))
 
+	return nil
+}
+
+// initializeAuth wires the auth package to the persistent settings store and
+// loads the JWT signing key before any authenticated route is served. A
+// missing or unreadable persisted key is fatal: starting the server with an
+// empty signing key would let anyone forge HS256 tokens. First-run bootstrap
+// (the installer runs the server once to create the schema) may supply the key
+// through RUNIC_JWT_SECRET; it is persisted before use so later boots load it.
+// The one-time bootstrap marker outlives the key, so a deleted key is never
+// re-seeded from the environment and boot fails closed instead.
+func initializeAuth(ctx context.Context, database *sql.DB, settings *store.SettingsStore) error {
+	auth.SetSettingsStore(settings)
+	if err := auth.InitJwtKey(ctx, database); err != nil {
+		bootstrapKey := os.Getenv("RUNIC_JWT_SECRET")
+		if !errors.Is(err, sql.ErrNoRows) || bootstrapKey == "" {
+			return fmt.Errorf("failed to initialize JWT signing key: %w", err)
+		}
+		seeded, seedErr := db.JWTSecretsSeeded(ctx, database)
+		if seedErr != nil {
+			return fmt.Errorf("check JWT signing-key bootstrap marker: %w", seedErr)
+		}
+		if seeded {
+			return errors.New("JWT signing key is missing after bootstrap; refusing to re-seed from RUNIC_JWT_SECRET")
+		}
+		if setErr := settings.SetSystemConfig(ctx, "jwt_secret", bootstrapKey); setErr != nil {
+			return fmt.Errorf("persist bootstrap JWT signing key from RUNIC_JWT_SECRET: %w", setErr)
+		}
+		if markErr := db.MarkJWTSecretsSeeded(ctx, database); markErr != nil {
+			return fmt.Errorf("record JWT signing-key bootstrap marker: %w", markErr)
+		}
+		runiclog.Info("Persisted JWT signing key from RUNIC_JWT_SECRET")
+		if initErr := auth.InitJwtKey(ctx, database); initErr != nil {
+			return fmt.Errorf("failed to initialize JWT signing key: %w", initErr)
+		}
+	}
+
+	auth.JwtKeyMu.RLock()
+	keyLen := len(auth.JwtKey)
+	auth.JwtKeyMu.RUnlock()
+	if keyLen == 0 {
+		return errors.New("JWT signing key is empty after initialization")
+	}
 	return nil
 }
 
@@ -148,8 +216,33 @@ func main() {
 	}
 	runiclog.Info("Logs database initialized", "path", logsDBPath)
 
+	// Relocate legacy logs and normalize legacy timestamp formats before any
+	// alert engine starts reading firewall_logs. The sequence is mandatory: a
+	// failure aborts boot instead of letting alert engines run against
+	// unnormalized data or a half-recorded completion gate.
+	migCtx, migCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	migrated, normalized, deleted, err := db.MigrateLogsDB(migCtx, database, logsDB)
+	migCancel()
+	if err != nil {
+		runiclog.Fatal("Logs database startup migration failed", "error", err)
+	}
+	if migrated > 0 {
+		runiclog.Info("firewall logs migrated from main database", "rows", migrated)
+	}
+	if normalized > 0 || deleted > 0 {
+		runiclog.Info("firewall log timestamps normalized", "normalized", normalized, "deleted", deleted)
+	}
+
 	// Ensure control_plane_port is set in system_config for rule generation
 	settingsStore := store.NewSettingsStore(database, nil)
+
+	// Initialize authentication before routes are registered or served. A
+	// missing or unreadable persisted signing key aborts boot instead of
+	// leaving protected APIs verifiable with an empty key.
+	if err := initializeAuth(context.Background(), database, settingsStore); err != nil {
+		runiclog.Fatal("Authentication initialization failed", "error", err)
+	}
+
 	if err := settingsStore.SetSystemConfig(context.TODO(), "control_plane_port", port); err != nil {
 		runiclog.Fatal("Failed to set control_plane_port in system_config", "error", err)
 	}
@@ -237,8 +330,6 @@ func main() {
 	// Start background lifecycle goroutines (workers, log hub, cleanup)
 	apiInstance.Start(ctx)
 
-	srv := &http.Server{}
-
 	// For any route not matched above, serve the SPA with CSP nonce injection
 	// If the file exists, serve it; otherwise serve index.html (for client-side routing)
 	r.PathPrefix("/").Handler(api.CSP()(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -304,9 +395,7 @@ func main() {
 		},
 	}
 
-	srv.Addr = addr
-	srv.Handler = r
-	srv.TLSConfig = tlsConfig
+	srv := newHTTPServer(addr, r, tlsConfig)
 
 	// Signal channel with buffer 2 to prevent lost signals during shutdown
 	sigCh := signal.ShutdownSignal()

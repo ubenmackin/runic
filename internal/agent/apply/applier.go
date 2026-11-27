@@ -65,6 +65,23 @@ func IsNftFormat(content string) bool {
 	return strings.Contains(content, "table ") && !strings.Contains(content, "*filter")
 }
 
+// scheduleRevertFn is the auto-revert scheduler used by ApplyBundle. It is a
+// variable so tests can observe whether the safety watchdog stays armed after
+// a failed revert without waiting out the real 90-second delay.
+var scheduleRevertFn = scheduleRevert
+
+// revertAndDisarm restores the pre-apply backup and cancels the auto-revert
+// watchdog only after the restore is confirmed. If the restore fails the
+// watchdog stays armed so its delayed revert can retry instead of leaving the
+// host with flushed or partial rules.
+func revertAndDisarm(backup string, revertCancel context.CancelFunc) error {
+	if err := revertRules(backup); err != nil {
+		return err
+	}
+	revertCancel()
+	return nil
+}
+
 // ApplyBundle uses the confirmFunc callback to notify the control plane after successful apply.
 func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, controlPlaneURL, token, version string, confirmFunc func(context.Context, string) error) error {
 	log.Info("Received bundle version, verifying HMAC", "version", bundle.Version)
@@ -88,7 +105,7 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		log.Warn("Failed to persist backup to disk", "error", err)
 	}
 
-	revertCancel := scheduleRevert(backup, constants.AutoRevertDelay, controlPlaneURL, token, version)
+	revertCancel := scheduleRevertFn(backup, constants.AutoRevertDelay, controlPlaneURL, token, version)
 
 	// Write bundle to temp file BEFORE flushing so the restore payload is ready
 	// and the unprotected window between flush and restore is minimized.
@@ -106,16 +123,17 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 	// Flush iptables FIRST to release ipset references before destroying ipsets
 	// This prevents "ipset in use" errors during ipset recreate
 	if err := flushIPTables(ctx); err != nil {
-		revertCancel()
+		if revertErr := revertAndDisarm(backup, revertCancel); revertErr != nil {
+			log.Error("Revert failed, auto-revert watchdog remains active", "error", revertErr)
+		}
 		return fmt.Errorf("flush firewall: %w", err)
 	}
 
 	// Apply ipset definitions if present (after iptables flushed - can now destroy safely)
 	if strings.Contains(bundle.Rules, "# --- Ipset Definitions ---") {
 		if err := applyIpsets(ctx, bundle.Rules); err != nil {
-			revertCancel()
-			if revertErr := revertRules(backup); revertErr != nil {
-				log.Error("Revert failed", "error", revertErr)
+			if revertErr := revertAndDisarm(backup, revertCancel); revertErr != nil {
+				log.Error("Revert failed, auto-revert watchdog remains active", "error", revertErr)
 			}
 			return fmt.Errorf("ipset apply failed: %w", err)
 		}
@@ -127,7 +145,9 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 	// --noflush flag ensures atomic replacement without an intermediate empty state.
 	restoreCtx := context.WithoutCancel(ctx)
 	if err := restoreFromFile(restoreCtx, tmpPath, stripIpsetSection(bundle.Rules)); err != nil {
-		revertCancel()
+		if revertErr := revertAndDisarm(backup, revertCancel); revertErr != nil {
+			log.Error("Revert failed, auto-revert watchdog remains active", "error", revertErr)
+		}
 		return fmt.Errorf("rule restore failed: %w", err)
 	}
 
@@ -147,12 +167,11 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 			log.Warn("Smoke test returned client error (application-layer response proves OUTPUT connectivity, not reverting)", "status", badReq.status, "error", err)
 		} else {
 			log.Warn("Smoke test failed after apply, reverting", "error", err)
-			if revertErr := revertRules(backup); revertErr != nil {
-				log.Error("Revert failed", "error", revertErr)
+			if revertErr := revertAndDisarm(backup, revertCancel); revertErr != nil {
+				log.Error("Revert failed, auto-revert watchdog remains active", "error", revertErr)
 			} else {
 				log.Info("Rules reverted successfully")
 			}
-			revertCancel()
 			return fmt.Errorf("smoke test failed, reverted: %w", err)
 		}
 	}

@@ -105,13 +105,24 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 		t.Fatal(err)
 	}
 
-	// Initialize JWT key using the package's init function
-	// This avoids the DB query issue by generating a random key directly
+	// Initialize the JWT signing key from a persisted secret, mirroring the
+	// production startup path. InitJwtKey fails closed when the key is absent.
 	ctx := context.Background()
+	if _, err := database.Exec(
+		"INSERT OR REPLACE INTO system_config (key, value) VALUES ('jwt_secret', ?)",
+		"integration-test-jwt-signing-key-0123456789",
+	); err != nil {
+		if cErr := database.Close(); cErr != nil {
+			t.Log(cErr)
+		}
+		if rErr := os.Remove(dbPath); rErr != nil {
+			t.Log(rErr)
+		}
+		t.Fatalf("seed jwt_secret: %v", err)
+	}
+	auth.SetSettingsStore(store.NewSettingsStore(database, nil))
 	if err := auth.InitJwtKey(ctx, database); err != nil {
-		// If it fails, the package should have generated a random key anyway
-		// Continue - auth.InitJwtKey generates a fallback key on error
-		t.Logf("InitJwtKey fallback utilized: %v", err)
+		t.Fatalf("InitJwtKey: %v", err)
 	}
 
 	// Set the global TokenStore for auth.Middleware revocation checks

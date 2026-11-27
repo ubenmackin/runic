@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -74,12 +75,31 @@ func getIsProduction() bool {
 	return isProduction
 }
 
+// expireRefreshCookieAtPath removes a refresh cookie scoped to path. A browser
+// keeps one cookie per name and path, so every path the cookie was ever issued
+// under must be expired explicitly; otherwise the stale value survives and can
+// shadow the current cookie on requests.
+func expireRefreshCookieAtPath(w http.ResponseWriter, path string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     RefreshTokenCookieName,
+		Value:    "",
+		Path:     path,
+		HttpOnly: true,
+		Secure:   getIsProduction(),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+}
+
 func setAuthCookies(w http.ResponseWriter, access, refresh string) {
-	// The access token cookie uses SameSite=Strict to defend against CSRF on
+	// Expire the legacy path before issuing the current cookie so browsers
+	// drop the old value instead of sending it alongside the new one. The
+	// access token cookie uses SameSite=Strict to defend against CSRF on
 	// state-changing API requests. The refresh token cookie keeps SameSite=Lax
 	// because the refresh endpoint is reachable cross-tab and the refresh
 	// token is opaque (no JWT claims) — a full double-submit / token-binding
 	// scheme is out of scope here.
+	expireRefreshCookieAtPath(w, legacyRefreshTokenCookiePath)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "runic_access_token",
 		Value:    access,
@@ -90,9 +110,9 @@ func setAuthCookies(w http.ResponseWriter, access, refresh string) {
 		MaxAge:   AccessTokenCookieMaxAge,
 	})
 	http.SetCookie(w, &http.Cookie{
-		Name:     "runic_refresh_token",
+		Name:     RefreshTokenCookieName,
 		Value:    refresh,
-		Path:     "/api/v1/auth/refresh",
+		Path:     RefreshTokenCookiePath,
 		HttpOnly: true,
 		Secure:   getIsProduction(),
 		SameSite: http.SameSiteLaxMode,
@@ -110,15 +130,10 @@ func clearAuthCookies(w http.ResponseWriter) {
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
-	http.SetCookie(w, &http.Cookie{
-		Name:     "runic_refresh_token",
-		Value:    "",
-		Path:     "/api/v1/auth/refresh",
-		HttpOnly: true,
-		Secure:   getIsProduction(),
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
+	// Expire the legacy path first so the canonical path is the last refresh
+	// cookie in the response.
+	expireRefreshCookieAtPath(w, legacyRefreshTokenCookiePath)
+	expireRefreshCookieAtPath(w, RefreshTokenCookiePath)
 }
 
 // HandleSetupGET handles the setup check. Returns {"needs_setup": true} if no users exist, false otherwise.
@@ -146,6 +161,14 @@ func (h *Handler) HandleSetupGET(w http.ResponseWriter, r *http.Request) {
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]bool{"needs_setup": count == 0})
+}
+
+// isLoopbackRemote reports whether the request's TCP peer is a loopback
+// address. First-run setup uses it to keep the bootstrap administrator on the
+// server's own loopback until an account exists.
+func isLoopbackRemote(r *http.Request) bool {
+	ip := net.ParseIP(common.RemoteAddrIP(r))
+	return ip != nil && ip.IsLoopback()
 }
 
 // HandleSetupPOST handles the initial setup. Returns 403 if users already exist.
@@ -188,6 +211,23 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
+
+	// Before the first user exists, a single unauthenticated POST here mints a
+	// full administrator. Reject non-loopback callers so a remote attacker
+	// racing the operator to the endpoint cannot claim the instance. Once an
+	// account exists the transaction below rejects setup regardless of origin.
+	if !isLoopbackRemote(r) {
+		count, err := h.UserStore.CountUsers(ctx)
+		if err != nil {
+			common.RespondError(w, http.StatusInternalServerError, "failed to check setup status")
+			return
+		}
+		if count == 0 {
+			log.WarnContext(ctx, "setup rejected from non-loopback caller before first user", "remote_addr", common.RemoteAddrIP(r))
+			common.RespondError(w, http.StatusForbidden, "Setup must be completed from the server's loopback interface")
+			return
+		}
+	}
 
 	// Hash password
 	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), 12)
@@ -305,11 +345,32 @@ func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
-	// The auth.Middleware has already validated the token and populated the context.
-	// Use context values instead of re-parsing the JWT.
-	uniqueID := auth.UniqueIDFromContext(r.Context())
-	if uniqueID == "" {
-		// No valid token in context — treat logout as an idempotent no-op.
+	// The refresh cookie is scoped to the auth surface so browsers now send it
+	// to logout; its jti must be recorded as revoked even when the access token
+	// is already expired and absent from the request context, otherwise a
+	// copied refresh token could keep minting sessions after the client-side
+	// cookie is cleared. A browser can send both the legacy-path and current
+	// cookies, and Request.Cookie returns only the first, so revoke every
+	// valid refresh value on the request.
+	for _, refreshToken := range refreshTokenCookieValues(r) {
+		refreshClaims, err := auth.ValidateToken(refreshToken)
+		if err != nil || refreshClaims == nil || refreshClaims.TokenType != auth.TokenTypeRefresh {
+			continue
+		}
+		if err := h.TokenStore.RevokeToken(ctx, refreshClaims.UniqueID, refreshClaims.ExpiresAt.Time, "refresh"); err != nil {
+			log.WarnContext(ctx, "failed to revoke refresh token on logout", "error", err)
+		}
+	}
+
+	// A valid access token is revoked whenever one is present. The public
+	// logout route has no auth middleware, so validate the access cookie and
+	// Bearer header here and revoke every token found (a stale cookie must not
+	// hide a live Bearer token). Each validated token contributes its own
+	// expiry, so the hourly cleanup cannot drop a revocation while a
+	// long-lived legacy token is still valid.
+	refs := accessTokenRefs(r)
+	if len(refs) == 0 {
+		// No valid access token — treat logout as an idempotent no-op.
 		// Clear any stale auth cookies and return success so clients never
 		// enter a refresh loop via this endpoint.
 		clearAuthCookies(w)
@@ -317,28 +378,69 @@ func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Revoke the access token using its stored unique_id.
-	// We use the token's original expiry as the TTL for the revocation entry.
-	// Since we don't have the original expiry from context, we use the default
-	// access token lifetime (1 hour) as a safe upper bound.
-	expiresAt := time.Now().Add(AccessTokenTTL)
-	if err := h.TokenStore.RevokeToken(ctx, uniqueID, expiresAt, "access"); err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "Failed to revoke token")
-		return
-	}
-
-	// Also revoke the refresh token if present
-	if refreshCookie, err := r.Cookie("runic_refresh_token"); err == nil && refreshCookie.Value != "" {
-		if refreshClaims, err := auth.ValidateToken(refreshCookie.Value); err == nil && refreshClaims != nil {
-			if err := h.TokenStore.RevokeToken(ctx, refreshClaims.UniqueID, refreshClaims.ExpiresAt.Time, "refresh"); err != nil {
-				log.WarnContext(ctx, "failed to revoke refresh token on logout", "error", err)
-			}
+	// Revoke each access token until its own expiry. A fixed TTL shorter than
+	// the token's lifetime would let the hourly cleanup drop the entry while a
+	// long-lived legacy token is still valid.
+	for _, ref := range refs {
+		if err := h.TokenStore.RevokeToken(ctx, ref.uniqueID, ref.expiresAt, "access"); err != nil {
+			common.RespondError(w, http.StatusInternalServerError, "Failed to revoke token")
+			return
 		}
 	}
 
 	clearAuthCookies(w)
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
+}
+
+// refreshTokenCookieValues returns every refresh token cookie value on the
+// request. A cookie path change leaves browsers holding the same cookie name
+// under multiple paths, and Request.Cookie returns only the first, so callers
+// must consider all values and ignore stale ones.
+func refreshTokenCookieValues(r *http.Request) []string {
+	var values []string
+	for _, cookie := range r.Cookies() {
+		if cookie.Name == RefreshTokenCookieName && cookie.Value != "" {
+			values = append(values, cookie.Value)
+		}
+	}
+	return values
+}
+
+// accessTokenRef pairs a validated access token's unique ID with the expiry
+// its revocation entry must outlive.
+type accessTokenRef struct {
+	uniqueID  string
+	expiresAt time.Time
+}
+
+// accessTokenRefs returns every valid access token presented on the access
+// cookie or Authorization header, along with the expiry taken from its
+// claims. Logout is reachable without the auth middleware, so it validates
+// the tokens itself; both sources are checked because a stale cookie must not
+// hide a live Bearer token.
+func accessTokenRefs(r *http.Request) []accessTokenRef {
+	var refs []accessTokenRef
+	seen := make(map[string]struct{}, 2)
+	add := func(tokenStr string) {
+		if tokenStr == "" {
+			return
+		}
+		claims, err := auth.ValidateToken(tokenStr)
+		if err != nil || claims == nil || claims.TokenType != auth.TokenTypeAccess || claims.UniqueID == "" {
+			return
+		}
+		if _, ok := seen[claims.UniqueID]; ok {
+			return
+		}
+		seen[claims.UniqueID] = struct{}{}
+		refs = append(refs, accessTokenRef{uniqueID: claims.UniqueID, expiresAt: claims.ExpiresAt.Time})
+	}
+	if cookie, err := r.Cookie("runic_access_token"); err == nil {
+		add(cookie.Value)
+	}
+	add(auth.ExtractBearerToken(r.Header.Get("Authorization")))
+	return refs
 }
 
 func (h *Handler) HandleGetMe(w http.ResponseWriter, r *http.Request) {
@@ -348,7 +450,8 @@ func (h *Handler) HandleGetMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleRefreshPOST handles token refresh. It validates the refresh token from cookie and issues a new access token if valid.
+// HandleRefreshPOST handles token refresh. It validates the refresh token from
+// the refresh cookie(s) and issues a new access token if valid.
 func (h *Handler) HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 	if h.UserStore == nil {
 		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
@@ -360,25 +463,58 @@ func (h *Handler) HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
-	cookie, err := r.Cookie("runic_refresh_token")
-	if err != nil || cookie.Value == "" {
+	tokens := refreshTokenCookieValues(r)
+	if len(tokens) == 0 {
 		common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	refreshToken := cookie.Value
 
-	claims, err := auth.ValidateToken(refreshToken)
-	if err != nil || claims == nil {
+	// A browser can present both the legacy-path and current refresh cookies,
+	// with the stale one first. Select the first value that passes the full
+	// validation chain so an unusable legacy cookie cannot shadow a valid one.
+	var (
+		claims *auth.Claims
+		user   models.UserRow
+	)
+	for _, refreshToken := range tokens {
+		candidateClaims, err := auth.ValidateToken(refreshToken)
+		if err != nil || candidateClaims == nil || candidateClaims.TokenType != auth.TokenTypeRefresh {
+			continue
+		}
+
+		if revoked, err := h.TokenStore.IsTokenRevoked(ctx, candidateClaims.UniqueID); err != nil || revoked {
+			continue
+		}
+
+		// Resolve the live user before minting anything. A deleted account must
+		// not be able to exchange a still-valid refresh JWT for a fresh session,
+		// and a password change bumps token_version, which invalidates refresh
+		// tokens minted under the previous credential epoch.
+		candidateUser, err := h.UserStore.GetUserByUsername(ctx, candidateClaims.Username)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				log.WarnContext(ctx, "refresh rejected - user no longer exists", "username", candidateClaims.Username)
+				continue
+			}
+			log.ErrorContext(ctx, "refresh rejected - user lookup failed", "username", candidateClaims.Username, "error", err)
+			common.RespondError(w, http.StatusInternalServerError, "failed to refresh session")
+			return
+		}
+		if candidateUser.TokenVersion != candidateClaims.TokenVersion {
+			log.WarnContext(ctx, "refresh rejected - token version revoked", "username", candidateClaims.Username)
+			continue
+		}
+
+		claims = candidateClaims
+		user = candidateUser
+		break
+	}
+	if claims == nil {
 		common.RespondError(w, http.StatusUnauthorized, "Invalid refresh token")
 		return
 	}
 
-	if revoked, err := h.TokenStore.IsTokenRevoked(ctx, claims.UniqueID); err != nil || revoked {
-		common.RespondError(w, http.StatusUnauthorized, "Token has been revoked")
-		return
-	}
-
-	accessToken, refreshToken, err := h.GenerateTokenPair(ctx, claims.Username)
+	accessToken, refreshToken, err := h.generateTokenPairForUser(&user)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate tokens")
 		return

@@ -94,9 +94,15 @@ func (h *Handler) getHostIDFromContext(w http.ResponseWriter, r *http.Request) (
 	}
 	hostname := hostID[5:]
 
-	peerID, err := h.PeerStore.GetPeerIDByHostname(r.Context(), hostname)
+	peerID, isManual, err := h.PeerStore.GetPeerAuthStatusByHostname(r.Context(), hostname)
 	if err != nil {
 		apicommon.RespondError(w, http.StatusNotFound, "peer not found")
+		return "", 0, false
+	}
+	// Defense in depth: AgentAuthMiddleware already rejects manual peers,
+	// but every agent handler must also refuse to act on one.
+	if isManual {
+		apicommon.RespondError(w, http.StatusUnauthorized, "unauthorized")
 		return "", 0, false
 	}
 

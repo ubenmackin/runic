@@ -2709,3 +2709,94 @@ func TestSend_HandshakeWithoutDoubleHello(t *testing.T) {
 		t.Errorf("stub did not receive message body; data: %q", gotData)
 	}
 }
+
+// TestSMTPSendRequiresSTARTTLSWhenUseTLS proves UseTLS fails closed when the
+// server does not advertise STARTTLS, instead of silently sending plaintext.
+func TestSMTPSendRequiresSTARTTLSWhenUseTLS(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start loopback SMTP stub: %v", err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("split loopback address: %v", err)
+	}
+
+	var mu sync.Mutex
+	var verbs []string
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		reader := bufio.NewReader(conn)
+		writer := bufio.NewWriter(conn)
+		if _, err := writer.WriteString("220 fake ESMTP ready\r\n"); err != nil {
+			return
+		}
+		if err := writer.Flush(); err != nil {
+			return
+		}
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			trimmed := strings.TrimRight(line, "\r\n")
+			verb := strings.ToUpper(strings.SplitN(strings.TrimSpace(trimmed), " ", 2)[0])
+			mu.Lock()
+			verbs = append(verbs, verb)
+			mu.Unlock()
+			switch verb {
+			case "EHLO", "HELO":
+				// Deliberately omit the STARTTLS extension.
+				_, _ = writer.WriteString("250-fake greets client\r\n250-8BITMIME\r\n250 OK\r\n")
+			case "QUIT":
+				_, _ = writer.WriteString("221 Bye\r\n")
+				_ = writer.Flush()
+				return
+			default:
+				_, _ = writer.WriteString("502 unimplemented\r\n")
+			}
+			if err := writer.Flush(); err != nil {
+				return
+			}
+		}
+	}()
+
+	sender := NewSMTPSender(&SMTPConfig{
+		Host:        host,
+		FromAddress: "alerts@example.com",
+		Enabled:     true,
+		UseTLS:      true,
+	}, nil, nil)
+
+	sendErr := sender.sendWithTLS(addr, nil, "alerts@example.com", []string{"recipient@example.com"}, []byte("Subject: test\r\n\r\nbody"))
+	if sendErr == nil {
+		t.Fatal("expected STARTTLS requirement error, got nil")
+	}
+	if !strings.Contains(sendErr.Error(), "STARTTLS") {
+		t.Fatalf("expected STARTTLS requirement error, got %v", sendErr)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for SMTP stub to finish")
+	}
+
+	mu.Lock()
+	gotVerbs := append([]string(nil), verbs...)
+	mu.Unlock()
+	for _, verb := range gotVerbs {
+		if verb == "MAIL" || verb == "RCPT" || verb == "DATA" {
+			t.Fatalf("client continued the plaintext conversation despite UseTLS: %v", gotVerbs)
+		}
+	}
+}

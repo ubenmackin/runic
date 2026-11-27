@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -212,6 +213,54 @@ func (e busyCodeError) Error() string { return e.msg }
 func (e busyCodeError) Code() int     { return e.code }
 func (e busyCodeError) ExtendedCode() int {
 	return e.ext
+}
+
+// assertOwnerOnlySQLiteFiles verifies the database file is 0600 and that any
+// WAL/SHM sidecars present are also owner-only.
+func assertOwnerOnlySQLiteFiles(t *testing.T, path string) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat database file %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Errorf("%s mode = %04o, want 0600", path, got)
+	}
+	for _, candidate := range []string{path + "-wal", path + "-shm"} {
+		info, err := os.Stat(candidate)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			t.Fatalf("stat sidecar %s: %v", candidate, err)
+		}
+		if got := info.Mode().Perm(); got != 0600 {
+			t.Errorf("%s mode = %04o, want 0600", candidate, got)
+		}
+	}
+}
+
+func TestInitDB_Permissions(t *testing.T) {
+	t.Setenv("RUNIC_DB_PATH", "")
+
+	dbPath := filepath.Join(t.TempDir(), "runic.db")
+	database, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Logf("close database: %v", err)
+		}
+	}()
+
+	// Force a write so WAL/SHM sidecars exist while the connection is open.
+	if _, err := database.Exec(
+		"INSERT INTO system_config (key, value) VALUES ('permissions_probe', '1')"); err != nil {
+		t.Fatalf("insert probe row: %v", err)
+	}
+
+	assertOwnerOnlySQLiteFiles(t, dbPath)
 }
 
 func TestIsBusyError(t *testing.T) {

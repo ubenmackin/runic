@@ -103,8 +103,10 @@ func validateAllIPs(ips []string) error {
 // ValidatePlainIP (CIDR rejected), unlike CIDR-capable peer fields via
 // ValidatePeerCIDR. Returns (true, "") if valid, or (false, reason) if invalid.
 func (e *LogEvent) Validate() (bool, string) {
-	if e.Timestamp != "" && !isValidLogTimestamp(e.Timestamp) {
-		return false, fmt.Sprintf("invalid timestamp: %s", e.Timestamp)
+	if e.Timestamp != "" {
+		if _, err := runiccommon.NormalizeFirewallTimestamp(e.Timestamp, time.Now()); err != nil {
+			return false, fmt.Sprintf("invalid timestamp: %s", runiccommon.TruncateString(e.Timestamp, maxLoggedReasonLen))
+		}
 	}
 	if e.SrcIP != "" && common.ValidatePlainIP(e.SrcIP) != nil {
 		return false, fmt.Sprintf("invalid src_ip: %s", e.SrcIP)
@@ -131,25 +133,6 @@ func (e *LogEvent) Validate() (bool, string) {
 		return false, fmt.Sprintf("raw_line too large: %d bytes (max %d)", len(e.RawLine), maxRawLineBytes)
 	}
 	return true, ""
-}
-
-// isValidLogTimestamp reports whether ts parses as RFC3339 (with or without
-// fractional seconds), a SQLite datetime ("2006-01-02 15:04:05"), or a
-// date-only value ("2006-01-02").
-func isValidLogTimestamp(ts string) bool {
-	if _, err := time.Parse(time.RFC3339Nano, ts); err == nil {
-		return true
-	}
-	if _, err := time.Parse(time.RFC3339, ts); err == nil {
-		return true
-	}
-	if _, err := time.Parse("2006-01-02 15:04:05", ts); err == nil {
-		return true
-	}
-	if _, err := time.Parse("2006-01-02", ts); err == nil {
-		return true
-	}
-	return false
 }
 
 // filterValidIPs returns only the entries that pass the shared plain-IP
@@ -275,6 +258,29 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if !ok || sub == "" {
 			common.RespondError(w, http.StatusUnauthorized, "unauthorized")
 			return
+		}
+
+		// Manual peers have no agent. Reject every agent endpoint for them
+		// even if a token was somehow minted (for example legacy imported
+		// peers with predictable credentials). A missing peer row is left to
+		// the handler so its existing 404 behavior is preserved; a real
+		// lookup failure fails closed.
+		if strings.HasPrefix(sub, "host-") {
+			hostname := strings.TrimPrefix(sub, "host-")
+			if hostname != "" {
+				_, isManual, lookupErr := h.PeerStore.GetPeerAuthStatusByHostname(r.Context(), hostname)
+				if lookupErr != nil {
+					if !errors.Is(lookupErr, sql.ErrNoRows) {
+						runiclog.Error("failed to check manual peer status", "error", lookupErr)
+						common.InternalError(w)
+						return
+					}
+				} else if isManual {
+					runiclog.Warn("rejected agent request for manual peer", "hostname", hostname)
+					common.RespondError(w, http.StatusUnauthorized, "unauthorized")
+					return
+				}
+			}
 		}
 
 		// Check token revocation via jti (unique token ID). Fail closed to match
@@ -644,7 +650,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
-	existingID, _, err := h.PeerStore.FindPeerByHostname(ctx, input.Hostname)
+	existingID, isManual, err := h.PeerStore.GetPeerAuthStatusByHostname(ctx, input.Hostname)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		_, agentToken, hmacKey, agentKey, err := h.registerNewPeer(ctx, &input, w)
@@ -692,6 +698,22 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	} else if err != nil {
 		runiclog.Error("database error checking hostname error", "error", err)
 		common.InternalError(w)
+		return
+	}
+
+	// Manual peers have no agent, so no re-registration method may succeed
+	// for them: bearer, agent_key, HMAC proof, and registration token are
+	// all rejected. The rejection happens before the token claim below so a
+	// valid single-use registration token is not burned by the attempt. Use
+	// the same generic messages as the unknown-host path to avoid turning
+	// this guard into an existence oracle.
+	if isManual {
+		runiclog.Warn("rejected agent re-registration for manual peer", "hostname", input.Hostname, "peer_id", existingID)
+		if input.RegistrationToken == "" {
+			common.RespondError(w, http.StatusUnauthorized, "registration token required")
+		} else {
+			common.RespondError(w, http.StatusUnauthorized, "invalid registration token")
+		}
 		return
 	}
 
@@ -775,10 +797,11 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		"hmac_key":               existingHMACKey,
 	}
 	// Bootstrap old fleet that never received an agent key: return the stored
-	// agent key only when authorized via HMAC proof or a fresh registration
-	// token, so a captured agent key alone cannot be exchanged for key
-	// disclosure and HMAC rotation can fall back to agent_key afterwards.
-	if method == "hmac_proof" || method == "registration_token" {
+	// agent key only for a fresh single-use registration token. The HMAC proof
+	// path deliberately omits agent_key — possessing the current HMAC key must
+	// not disclose the longer-lived agent key (an actor who obtained new HMAC
+	// material through rotation could otherwise mint agent tokens).
+	if method == "registration_token" {
 		if peer, lookupErr := h.PeerStore.GetPeerByID(ctx, existingID); lookupErr != nil {
 			runiclog.Error("failed to lookup stored agent key for re-registration bootstrap", "error", lookupErr, "peer_id", existingID)
 		} else if peer.AgentKey != "" {
@@ -999,11 +1022,30 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// Empty timestamps pass Validate but cannot be windowed, so normalize
+		// here and skip anything the canonical UTC storage form cannot represent.
+		normalizedTimestamp, tsErr := runiccommon.NormalizeFirewallTimestamp(ev.Timestamp, time.Now())
+		if tsErr != nil {
+			runiclog.Warn("skipping log event with invalid timestamp", "peer_id", serverID, "reason", runiccommon.TruncateString(tsErr.Error(), maxLoggedReasonLen))
+			skipped++
+			continue
+		}
+
+		// Live consumers receive time.Time, so parse the canonical storage form
+		// back into the instant it represents. A failure skips the event instead
+		// of broadcasting the zero time.
+		ts, parseErr := time.ParseInLocation(runiccommon.FirewallTimestampLayout, normalizedTimestamp, time.UTC)
+		if parseErr != nil {
+			runiclog.Warn("skipping log event with unparseable canonical timestamp", "peer_id", serverID, "reason", runiccommon.TruncateString(parseErr.Error(), maxLoggedReasonLen))
+			skipped++
+			continue
+		}
+
 		// Note: Logs DB schema uses different column names than main DB
 		err := h.DashboardStore.InsertFirewallLog(ctx, &store.FirewallLogEntry{
 			PeerID:       fmt.Sprintf("%d", serverID),
 			PeerHostname: peerHostname,
-			Timestamp:    ev.Timestamp,
+			Timestamp:    normalizedTimestamp,
 			EventType:    ev.Direction,
 			SrcIP:        ev.SrcIP,
 			DstIP:        ev.DstIP,
@@ -1021,11 +1063,13 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 		accepted++
 
 		event := models.LogEvent{
-			PeerID:   serverID,
-			Action:   ev.Action,
-			SrcIP:    ev.SrcIP,
-			DstIP:    ev.DstIP,
-			Protocol: ev.Protocol,
+			PeerID:       serverID,
+			PeerHostname: peerHostname,
+			Timestamp:    ts,
+			Action:       ev.Action,
+			SrcIP:        ev.SrcIP,
+			DstIP:        ev.DstIP,
+			Protocol:     ev.Protocol,
 		}
 		if hub := LogHubFromContext(r.Context()); hub != nil {
 			hub.Broadcast(&event)

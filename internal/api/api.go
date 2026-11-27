@@ -33,7 +33,6 @@ import (
 	"runic/internal/common/log"
 	"runic/internal/common/version"
 	"runic/internal/crypto"
-	dbpkg "runic/internal/db"
 	"runic/internal/engine"
 	"runic/internal/logcleanup"
 	"runic/internal/metrics"
@@ -83,11 +82,6 @@ type API struct {
 // NewAPI creates a new API instance. logsDB is the already-initialized logs database connection.
 // logsDBPath is the path to the logs database (for settings/clear-logs).
 func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath string, alertService *alerts.Service, encryptor *crypto.Encryptor) *API {
-	// Migration: Copy existing firewall_logs to logs DB if needed
-	if _, err := dbpkg.MigrateLogsFromMainDB(context.Background(), db, logsDB); err != nil {
-		log.Warn("log migration failed (existing logs will remain in main DB)", "error", err)
-	}
-
 	sseHub := events.NewSSEHub()
 	changeWorker := common.NewChangeWorker(sseHub, db)
 	pushWorker := common.NewPushWorker(db, compiler, alertService, sseHub)
@@ -120,6 +114,9 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath st
 	// authenticate through the shared auth middleware with live role lookup.
 	auth.SetPATStore(userTokenStore)
 	auth.SetPATUserStore(userStore)
+	// Wire per-user token version checks so password changes and account
+	// deletion revoke outstanding access tokens on the next request.
+	auth.SetSessionUserStore(userStore)
 	return &API{
 		Compiler:     compiler,
 		DB:           db,
@@ -250,6 +247,12 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	// PAT creation is rate-limited like login to bound credential minting.
 	a.TokenRateLimiter = middleware.NewRateLimiter(5, time.Minute)
 
+	// First-run setup stays public so an operator with no account can reach
+	// it, but HandleSetupPOST only mints the bootstrap administrator for a
+	// loopback TCP peer while the users table is empty; a remote caller cannot
+	// claim the instance by racing to the first POST. Proxy headers are
+	// stripped so the per-IP limiter and the loopback test observe the true
+	// TCP peer.
 	apiRouter.Handle("/setup", stripSpoofableProxyHeaders(http.HandlerFunc(a.Auth.HandleSetupGET))).Methods("GET")
 	apiRouter.Handle("/setup", stripSpoofableProxyHeaders(http.HandlerFunc(a.Auth.HandleSetupPOST))).Methods("POST")
 
@@ -265,7 +268,17 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	// Token refresh (public - uses refresh token, not access token)
 	// Protected by cookie presence check + IP rate limiting keyed on
 	// RemoteAddrIP so header rotation cannot bypass the 10/min limit.
-	apiRouter.Handle("/auth/refresh", RequireRefreshCookie()(stripSpoofableProxyHeaders(a.RefreshRateLimiter.StrictMiddleware(http.HandlerFunc(a.Auth.HandleRefreshPOST))))).Methods("POST")
+	apiRouter.Handle(authhandlers.RefreshRoutePath, RequireRefreshCookie()(stripSpoofableProxyHeaders(a.RefreshRateLimiter.StrictMiddleware(http.HandlerFunc(a.Auth.HandleRefreshPOST))))).Methods("POST")
+
+	// Logout is public: the access token cookie expires after one hour while
+	// the refresh token cookie lives for seven days, so requiring a valid
+	// access token would make logout unreachable and leave the refresh jti
+	// valid for an attacker holding a copy. The handler revokes the presented
+	// refresh jti and clears both cookies even when the access token is
+	// expired or absent, and still revokes a live access token when one is
+	// presented. Rate limited on RemoteAddrIP with the same header-stripping
+	// hardening as the other auth endpoints.
+	apiRouter.Handle(authhandlers.LogoutRoutePath, stripSpoofableProxyHeaders(a.LogoutRateLimiter.StrictMiddleware(http.HandlerFunc(a.Auth.HandleLogoutPOST)))).Methods("POST")
 
 	// Agent registration stays public (new peers hold no JWT yet) but the
 	// handler requires a fresh single-use token or proof of possession for
@@ -277,11 +290,6 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	// Protected routes (require JWT authentication)
 	protected := apiRouter.NewRoute().Subrouter()
 	protected.Use(auth.Middleware)
-
-	// Logout is authenticated so brute force is out of scope, but it stays
-	// rate-limited on RemoteAddrIP for abuse bounding with the same
-	// header-stripping hardening as the other auth endpoints.
-	protected.Handle("/auth/logout", stripSpoofableProxyHeaders(a.LogoutRateLimiter.StrictMiddleware(http.HandlerFunc(a.Auth.HandleLogoutPOST)))).Methods("POST")
 
 	authViewer := protected.PathPrefix("/auth").Subrouter()
 	a.Auth.RegisterRoutes(authViewer)
@@ -350,6 +358,11 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	admin.HandleFunc("/registration-tokens", a.Agents.ListRegistrationTokens).Methods("GET")
 	admin.HandleFunc("/registration-tokens", a.Agents.GenerateRegistrationToken).Methods("POST")
 	admin.HandleFunc("/registration-tokens/{id:[0-9]+}", a.Agents.RevokeRegistrationToken).Methods("DELETE")
+
+	// Key rotation mints replacement HMAC material that can be exchanged for
+	// agent credentials through the HMAC-proof re-registration path, so it is
+	// admin-only (the UI already gates it behind isAdmin).
+	admin.HandleFunc("/peers/{id:[0-9]+}/rotate-key", a.Peers.RotatePeerKey).Methods("POST")
 
 	settingsAdmin := admin.PathPrefix("/settings").Subrouter()
 	a.Settings.RegisterRoutes(settingsAdmin)

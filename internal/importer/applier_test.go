@@ -3,6 +3,7 @@ package importer
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -229,6 +230,36 @@ func TestApplySession_PeerIPsCreated(t *testing.T) {
 	assert.True(t, isManual, "imported peer should be manual")
 }
 
+func TestApplySession_ImportedPeerAgentKeyIsRandom(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	sessionID, _, _, _, _ := setupImportSession(t, database)
+
+	changeWorker := change.NewChangeWorker(nil, database)
+	changeWorker.Stop()
+
+	ctx := context.Background()
+	result, err := ApplySession(ctx, database, sessionID, changeWorker)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, result.PeersCreated)
+
+	var agentKey string
+	require.NoError(t, database.QueryRowContext(ctx,
+		"SELECT agent_key FROM peers WHERE hostname = ?", "imported-peer").Scan(&agentKey))
+
+	// Regression: the imported peer credential must not be derivable from
+	// public peer data (the old value was "imported-<ip>").
+	assert.NotEqual(t, "imported-192.168.1.100", agentKey,
+		"imported peer agent_key must not be derived from the IP address")
+	assert.NotContains(t, agentKey, "192.168.1.100",
+		"imported peer agent_key must not embed the IP address")
+	assert.GreaterOrEqual(t, len(agentKey), 32,
+		"imported peer agent_key should be a crypto/rand-backed secret")
+}
+
 func TestApplySession_RollbackDeletesImportedEntities(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -379,4 +410,60 @@ func TestApplySession_RollbackEntitySnapshotForPolicy(t *testing.T) {
 	require.NoError(t, database.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM peers WHERE id = ?", importingPeerID).Scan(&importingPeerExists))
 	assert.Equal(t, 1, importingPeerExists, "importing peer should not be affected by policy rollback")
+}
+
+func TestApplySession_RejectsControlCharacterPolicyName(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	sessionID, _, _, _, _ := setupImportSession(t, database)
+	_, err := database.ExecContext(context.Background(),
+		"UPDATE import_rules SET policy_name = ? WHERE session_id = ?",
+		"legit\n-A INPUT -j ACCEPT", sessionID)
+	require.NoError(t, err)
+
+	result, err := ApplySession(context.Background(), database, sessionID, nil)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "invalid policy name")
+
+	var policyCount int
+	require.NoError(t, database.QueryRowContext(context.Background(),
+		"SELECT COUNT(*) FROM policies WHERE name = 'test-policy'").Scan(&policyCount))
+	assert.Zero(t, policyCount, "invalid policy name must roll back the entire apply")
+}
+
+func TestApplySession_RejectsInvalidServiceProtocolAndPorts(t *testing.T) {
+	cases := []struct {
+		name   string
+		column string
+		value  string
+	}{
+		{name: "protocol with directives", column: "protocol", value: "tcp -j ACCEPT"},
+		{name: "destination ports with directives", column: "ports", value: "80 -j ACCEPT"},
+		{name: "source ports with directives", column: "source_ports", value: "80 -j ACCEPT"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			database, cleanup := testutil.SetupTestDB(t)
+			defer cleanup()
+			database.Exec("PRAGMA foreign_keys=OFF")
+
+			sessionID, _, _, _, stagingServiceID := setupImportSession(t, database)
+			query := fmt.Sprintf("UPDATE import_service_mappings SET %s = ? WHERE id = ?", tc.column)
+			_, err := database.ExecContext(context.Background(), query, tc.value, stagingServiceID)
+			require.NoError(t, err)
+
+			result, err := ApplySession(context.Background(), database, sessionID, nil)
+			require.Error(t, err)
+			assert.Nil(t, result)
+
+			var serviceCount int
+			require.NoError(t, database.QueryRowContext(context.Background(),
+				"SELECT COUNT(*) FROM services WHERE name = 'imported-service'").Scan(&serviceCount))
+			assert.Zero(t, serviceCount, "invalid service mapping must roll back the entire apply")
+		})
+	}
 }

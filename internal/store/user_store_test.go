@@ -414,6 +414,83 @@ func TestUserStore_UpdateUser_PasswordOnly(t *testing.T) {
 	}
 }
 
+func TestUserStore_GetUserByUsername_ReturnsTokenVersion(t *testing.T) {
+	store, _, cleanup := setupUserStoreTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if _, err := store.CreateUser(ctx, nil, "versionuser", "hash", "", "viewer"); err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	user, err := store.GetUserByUsername(ctx, "versionuser")
+	if err != nil {
+		t.Fatalf("GetUserByUsername failed: %v", err)
+	}
+	if user.TokenVersion != 1 {
+		t.Errorf("expected default token_version 1, got %d", user.TokenVersion)
+	}
+}
+
+func TestUserStore_UpdateUser_PasswordChangeBumpsTokenVersion(t *testing.T) {
+	store, _, cleanup := setupUserStoreTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	id, err := store.CreateUser(ctx, nil, "epochuser", "old_hash", "", "viewer")
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	before, err := store.GetUserByUsername(ctx, "epochuser")
+	if err != nil {
+		t.Fatalf("GetUserByUsername failed: %v", err)
+	}
+
+	if err := store.UpdateUser(ctx, int(id), UpdateUserFields{PasswordHash: "new_hash"}); err != nil {
+		t.Fatalf("UpdateUser failed: %v", err)
+	}
+
+	after, err := store.GetUserByUsername(ctx, "epochuser")
+	if err != nil {
+		t.Fatalf("GetUserByUsername failed: %v", err)
+	}
+	if after.TokenVersion != before.TokenVersion+1 {
+		t.Errorf("expected token_version %d after password change, got %d", before.TokenVersion+1, after.TokenVersion)
+	}
+}
+
+func TestUserStore_UpdateUser_NonPasswordDoesNotBumpTokenVersion(t *testing.T) {
+	store, _, cleanup := setupUserStoreTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	id, err := store.CreateUser(ctx, nil, "stableepoch", "hash", "old@example.com", "viewer")
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	before, err := store.GetUserByID(ctx, int(id))
+	if err != nil {
+		t.Fatalf("GetUserByID failed: %v", err)
+	}
+
+	if err := store.UpdateUser(ctx, int(id), UpdateUserFields{
+		Email: "new@example.com",
+		Role:  "editor",
+	}); err != nil {
+		t.Fatalf("UpdateUser failed: %v", err)
+	}
+
+	after, err := store.GetUserByID(ctx, int(id))
+	if err != nil {
+		t.Fatalf("GetUserByID failed: %v", err)
+	}
+	if after.TokenVersion != before.TokenVersion {
+		t.Errorf("expected token_version unchanged at %d, got %d", before.TokenVersion, after.TokenVersion)
+	}
+}
+
 func TestUserStore_UpdateUser_NoFields(t *testing.T) {
 	store, _, cleanup := setupUserStoreTestDB(t)
 	defer cleanup()

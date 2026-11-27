@@ -25,8 +25,11 @@ vi.stubGlobal('WebSocket', MockWebSocket)
 
 // Mock dependencies
 vi.mock('../hooks/useIsMobile', () => ({ useIsMobile: () => false }))
+
+// Mock usePendingChanges hook - mutable so tests can override the reported count
+const mockUsePendingChanges = vi.fn(() => ({ totalPendingCount: 0 }))
 vi.mock('../contexts/PendingChangesContext', () => ({
-  usePendingChanges: () => ({ totalPendingCount: 0 }),
+  usePendingChanges: () => mockUsePendingChanges(),
 }))
 
 // Mock components
@@ -128,6 +131,7 @@ describe('Dashboard Page', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockUsePendingChanges.mockReturnValue({ totalPendingCount: 0 })
     useAuthStore.setState({ isAuthenticated: true, username: 'admin', role: 'admin' })
     apiClient.api.get.mockImplementation((path) => {
       if (path === '/dashboard') return Promise.resolve(mockDashboardData)
@@ -233,9 +237,7 @@ describe('Dashboard Page', () => {
   })
 
   test('shows pending changes count from context', async () => {
-    vi.mock('../contexts/PendingChangesContext', () => ({
-      usePendingChanges: () => ({ totalPendingCount: 5 }),
-    }))
+    mockUsePendingChanges.mockReturnValue({ totalPendingCount: 5 })
     renderWithProviders(<Dashboard />)
     await waitFor(() => {
       expect(screen.getByText('Pending Changes')).toBeInTheDocument()

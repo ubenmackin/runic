@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	runiccommon "runic/internal/common"
 	"runic/internal/db"
 	"runic/internal/store"
 	"runic/internal/testutil"
@@ -445,8 +446,8 @@ func TestClearAllLogs(t *testing.T) {
 		{
 			name: "successful deletion with logs",
 			setup: func(t *testing.T, db *sql.DB, logsDB *sql.DB) {
-				logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "1", "peer1", time.Now(), "inbound", "192.168.1.1", "10.0.0.1", "tcp", 12345, 22, "ACCEPT")
-				logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "1", "peer1", time.Now(), "outbound", "10.0.0.1", "8.8.8.8", "udp", 53, 53, "ACCEPT")
+				logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "1", "peer1", runiccommon.FirewallTimestampCutoff(time.Now()), "inbound", "192.168.1.1", "10.0.0.1", "tcp", 12345, 22, "ACCEPT")
+				logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "1", "peer1", runiccommon.FirewallTimestampCutoff(time.Now()), "outbound", "10.0.0.1", "8.8.8.8", "udp", 53, 53, "ACCEPT")
 			},
 			wantCode: http.StatusOK,
 			checkResp: func(t *testing.T, w *httptest.ResponseRecorder) {
@@ -555,7 +556,7 @@ func TestGetLogSettings_LogCountAndSize(t *testing.T) {
 	defer cleanup()
 
 	for i := 0; i < 100; i++ {
-		logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "1", "peer1", time.Now(), "inbound", "192.168.1.1", "10.0.0.1", "tcp", 12345, 22, "ACCEPT")
+		logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "1", "peer1", runiccommon.FirewallTimestampCutoff(time.Now()), "inbound", "192.168.1.1", "10.0.0.1", "tcp", 12345, 22, "ACCEPT")
 	}
 
 	req := httptest.NewRequest("GET", "/api/v1/settings/logs", nil)

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"runic/internal/common"
 	"runic/internal/db"
 	"runic/internal/store"
 	"runic/internal/testutil"
@@ -229,20 +230,22 @@ func TestCheckBlockedSpike(t *testing.T) {
 
 	// Test 2: Spike detected (returns true with percentage)
 	t.Run("spike detected", func(t *testing.T) {
+		previousTimestamp := common.FirewallTimestampCutoff(time.Now().Add(-7 * time.Minute))
 		for i := 0; i < 5; i++ {
 			_, err := database.Exec(
 				"INSERT INTO firewall_logs (peer_id, action, timestamp, src_ip, dst_ip, protocol) VALUES (?, ?, ?, ?, ?, ?)",
-				peerID, "DROP", time.Now().Add(-7*time.Minute), "192.168.1.1", "10.0.0.1", "tcp",
+				peerID, "DROP", previousTimestamp, "192.168.1.1", "10.0.0.1", "tcp",
 			)
 			if err != nil {
 				t.Fatalf("failed to insert previous firewall log: %v", err)
 			}
 		}
 
+		recentTimestamp := common.FirewallTimestampCutoff(time.Now().Add(-2 * time.Minute))
 		for i := 0; i < 50; i++ {
 			_, err := database.Exec(
 				"INSERT INTO firewall_logs (peer_id, action, timestamp, src_ip, dst_ip, protocol) VALUES (?, ?, ?, ?, ?, ?)",
-				peerID, "DROP", time.Now().Add(-2*time.Minute), "192.168.1.1", "10.0.0.1", "tcp",
+				peerID, "DROP", recentTimestamp, "192.168.1.1", "10.0.0.1", "tcp",
 			)
 			if err != nil {
 				t.Fatalf("failed to insert recent firewall log: %v", err)
@@ -272,10 +275,11 @@ func TestCheckBlockedSpike(t *testing.T) {
 		}
 		baselinePeerID, _ := result.LastInsertId()
 
+		recentTimestamp := common.FirewallTimestampCutoff(time.Now().Add(-2 * time.Minute))
 		for i := 0; i < 15; i++ {
 			_, err := database.Exec(
 				"INSERT INTO firewall_logs (peer_id, action, timestamp, src_ip, dst_ip, protocol) VALUES (?, ?, ?, ?, ?, ?)",
-				baselinePeerID, "DROP", time.Now().Add(-2*time.Minute), "192.168.1.1", "10.0.0.2", "tcp",
+				baselinePeerID, "DROP", recentTimestamp, "192.168.1.1", "10.0.0.2", "tcp",
 			)
 			if err != nil {
 				t.Fatalf("failed to insert firewall log: %v", err)
@@ -292,6 +296,90 @@ func TestCheckBlockedSpike(t *testing.T) {
 		}
 		if percentage != 100 {
 			t.Errorf("expected percentage 100 for no baseline with significant traffic, got %d", percentage)
+		}
+	})
+}
+
+// TestCheckBlockedSpike_LegacyTimestampsAfterMigration verifies that the spike
+// windows bind canonical UTC cutoffs. Raw RFC3339 rows sort after canonical
+// bounds because 'T' sorts after ' ', so a legacy burst that has aged out would
+// otherwise still count as recent and re-trigger alerts.
+func TestCheckBlockedSpike_LegacyTimestampsAfterMigration(t *testing.T) {
+	ctx := context.Background()
+
+	setup := func(t *testing.T) (*ConditionEvaluator, *sql.DB) {
+		t.Helper()
+		mainDB, cleanupMain := testutil.SetupTestDB(t)
+		t.Cleanup(cleanupMain)
+		logsDB, cleanupLogs := testutil.SetupTestLogsDB(t)
+		t.Cleanup(cleanupLogs)
+		evaluator := NewConditionEvaluator(db.New(mainDB), db.New(logsDB), newTestHostnameLookup(mainDB))
+		return evaluator, logsDB
+	}
+
+	insertRows := func(t *testing.T, logsDB *sql.DB, peerID int, timestamp string, count int) {
+		t.Helper()
+		for i := 0; i < count; i++ {
+			_, err := logsDB.Exec(
+				"INSERT INTO firewall_logs (timestamp, peer_id, action) VALUES (?, ?, ?)",
+				timestamp, peerID, "DROP",
+			)
+			if err != nil {
+				t.Fatalf("failed to insert firewall log: %v", err)
+			}
+		}
+	}
+
+	t.Run("legacy burst aged out after migration", func(t *testing.T) {
+		evaluator, logsDB := setup(t)
+		insertRows(t, logsDB, 1, time.Now().Add(-3*time.Hour).UTC().Format(time.RFC3339), 20)
+
+		if _, _, err := db.MigrateFirewallLogTimestamps(ctx, logsDB); err != nil {
+			t.Fatalf("failed to migrate firewall log timestamps: %v", err)
+		}
+
+		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, 1, 5, 100)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if isSpike {
+			t.Error("expected no spike for legacy timestamps aged out of the window")
+		}
+		if percentage != 0 {
+			t.Errorf("expected percentage 0, got %d", percentage)
+		}
+	})
+
+	t.Run("canonical rows with empty previous window", func(t *testing.T) {
+		evaluator, logsDB := setup(t)
+		insertRows(t, logsDB, 1, common.FirewallTimestampCutoff(time.Now().Add(-time.Minute)), 20)
+
+		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, 1, 5, 100)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !isSpike {
+			t.Error("expected spike for canonical rows with no previous traffic")
+		}
+		if percentage != 100 {
+			t.Errorf("expected percentage 100, got %d", percentage)
+		}
+	})
+
+	t.Run("steady canonical windows", func(t *testing.T) {
+		evaluator, logsDB := setup(t)
+		insertRows(t, logsDB, 1, common.FirewallTimestampCutoff(time.Now().Add(-time.Minute)), 20)
+		insertRows(t, logsDB, 1, common.FirewallTimestampCutoff(time.Now().Add(-7*time.Minute)), 20)
+
+		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, 1, 5, 100)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if isSpike {
+			t.Error("expected no spike when the blocked rate is unchanged")
+		}
+		if percentage != 0 {
+			t.Errorf("expected percentage 0, got %d", percentage)
 		}
 	})
 }

@@ -241,12 +241,49 @@ func IsBusyError(err error) bool {
 		(strings.Contains(msg, "busy recovery") || strings.Contains(msg, "busy snapshot"))
 }
 
+// sqliteFilePath returns the on-disk path for a SQLite DSN so callers can
+// restrict the database file's permissions. It returns "" for in-memory
+// databases and URI forms that do not resolve to a local file path.
+func sqliteFilePath(dataSourceName string) string {
+	if isMemoryDSN(dataSourceName) {
+		return ""
+	}
+	path := strings.TrimPrefix(dataSourceName, "file:")
+	if cut, _, ok := strings.Cut(path, "?"); ok {
+		path = cut
+	}
+	if path == "" || strings.HasPrefix(path, "//") {
+		return ""
+	}
+	return path
+}
+
+// secureSQLiteFiles restricts the SQLite database and any present WAL/SHM
+// sidecars to owner-only permissions. SQLite creates these files with the
+// process umask, which commonly leaves plaintext secrets such as JWT signing
+// keys readable by other local users.
+func secureSQLiteFiles(path string) error {
+	if path == "" {
+		return nil
+	}
+	for _, candidate := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Chmod(candidate, 0600); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("chmod %s: %w", candidate, err)
+		}
+	}
+	return nil
+}
+
 func InitDB(dataSourceName string) (*sql.DB, error) {
 	if dbPath := os.Getenv("RUNIC_DB_PATH"); dbPath != "" {
 		dataSourceName = dbPath
 		log.Info("Using database path from RUNIC_DB_PATH", "path", dataSourceName)
 	}
 
+	dbPath := sqliteFilePath(dataSourceName)
 	dataSourceName = sqliteDSNWithPragmas(dataSourceName)
 
 	sqlDB, err := sql.Open("sqlite3", dataSourceName)
@@ -264,6 +301,12 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 
 	if err = sqlDB.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	// The file exists once the connection is open; restrict it before any
+	// schema writes so secrets are never exposed while initialization runs.
+	if err := secureSQLiteFiles(dbPath); err != nil {
+		return nil, fmt.Errorf("secure database files: %w", err)
 	}
 
 	// Enable WAL mode, foreign keys, busy timeout, and synchronous mode.
@@ -304,13 +347,21 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to seed system groups: %w", err)
 	}
 
-	// Migrate secrets from .env to database
-	if err := migrateEnvToDB(context.Background(), database.DB); err != nil {
-		log.Warn("Failed to migrate secrets from .env", "error", err)
+	// Seed JWT signing keys from .env exactly once. The recorded bootstrap
+	// marker outlives key deletion, so a stale .env file cannot replace a
+	// rotated key or resurrect a deleted one on a later boot.
+	if err := seedJWTSecrets(context.Background(), database.DB); err != nil {
+		log.Warn("Failed to seed JWT secrets from .env", "error", err)
 	}
 
 	if err := addDBConstraints(context.Background(), database.DB); err != nil {
 		log.Warn("Failed to add DB constraints", "error", err)
+	}
+
+	// Schema writes above may have created WAL/SHM sidecars; restrict those
+	// as well so the database is never readable by other local users.
+	if err := secureSQLiteFiles(dbPath); err != nil {
+		return nil, fmt.Errorf("secure database files: %w", err)
 	}
 
 	log.Info("Database connection established")

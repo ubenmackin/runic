@@ -4,6 +4,11 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     email TEXT DEFAULT '',
     role TEXT NOT NULL DEFAULT 'viewer' CHECK(role IN ('admin', 'editor', 'viewer')),
+    -- token_version is bumped whenever the user's password changes. Every
+    -- user token embeds the version it was minted under; the auth middleware
+    -- and refresh handler reject tokens whose version no longer matches, so
+    -- a password change (or user deletion) revokes all outstanding sessions.
+    token_version INTEGER NOT NULL DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

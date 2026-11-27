@@ -54,6 +54,7 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 	}{
 		{"users", "email"},
 		{"users", "role"},
+		{"users", "token_version"},
 		{"peers", "is_manual"},
 		{"peers", "description"},
 		{"peers", "has_ipset"},
@@ -166,6 +167,7 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 		// Users table migrations
 		{"users", "email", true},
 		{"users", "role", true},
+		{"users", "token_version", true},
 		// Peers table migrations
 		{"peers", "is_manual", true},
 		{"peers", "description", true},

@@ -3,6 +3,14 @@ import userEvent from '@testing-library/user-event'
 import { describe, test, expect, vi } from 'vitest'
 import LogLine from './LogLine'
 
+// Mirrors the component's local getters so the expected value is independent
+// of the timezone the test suite happens to run in.
+const formatLocalTimestamp = (value) => {
+  const date = new Date(value)
+  const pad = (part) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
 const createDropLog = (overrides = {}) => ({
   id: 1,
   timestamp: '2026-05-18T10:30:00.000Z',
@@ -35,10 +43,12 @@ const createAcceptLog = (overrides = {}) => ({
 
 describe('LogLine', () => {
   describe('rendering', () => {
-    test('renders timestamp in formatted form', () => {
+    test('renders timestamp in formatted local time', () => {
       render(<LogLine log={createDropLog()} expanded={false} />)
 
-      expect(screen.getByText(/2026-05-18/)).toBeInTheDocument()
+      expect(
+        screen.getByText(formatLocalTimestamp('2026-05-18T10:30:00.000Z'))
+      ).toBeInTheDocument()
     })
 
     test('renders action badge with DROP', () => {
@@ -93,6 +103,14 @@ describe('LogLine', () => {
     test('handles missing timestamp gracefully', () => {
       render(
         <LogLine log={createDropLog({ timestamp: null })} expanded={false} />
+      )
+
+      expect(screen.getByText('—')).toBeInTheDocument()
+    })
+
+    test('handles invalid timestamp string gracefully', () => {
+      render(
+        <LogLine log={createDropLog({ timestamp: 'not-a-date' })} expanded={false} />
       )
 
       expect(screen.getByText('—')).toBeInTheDocument()

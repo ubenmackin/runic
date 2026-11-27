@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -9,8 +10,8 @@ import (
 	"testing"
 	"time"
 
+	ic "runic/internal/common"
 	"runic/internal/common/constants"
-	"runic/internal/models"
 	"runic/internal/store"
 	"runic/internal/testutil"
 )
@@ -51,17 +52,11 @@ func TestDashboardQueries_EmptyDatabase(t *testing.T) {
 		t.Errorf("expected total_policies to be 0, got %d", totalPolicies)
 	}
 
-	// Verify blocked counts query (using logs DB)
-	var blockedLastHour, blockedLast24h int
-	err = logsDB.QueryRow(`
-		SELECT
-		COALESCE(SUM(CASE WHEN timestamp > datetime('now', '-1 hour') THEN 1 ELSE 0 END), 0) as blocked_last_hour,
-		COUNT(*) as blocked_last_24h
-		FROM firewall_logs
-		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
-	`).Scan(&blockedLastHour, &blockedLast24h)
+	// Verify blocked counts through the production store, which owns the
+	// canonical UTC window bounds.
+	blockedLastHour, blockedLast24h, err := store.NewDashboardStore(database, logsDB).GetBlockedCounts(context.Background())
 	if err != nil {
-		t.Fatalf("blocked query failed: %v", err)
+		t.Fatalf("blocked counts query failed: %v", err)
 	}
 
 	if blockedLastHour != 0 {
@@ -77,13 +72,13 @@ func TestDashboardQueries_WithPeers(t *testing.T) {
 	defer cleanup()
 
 	// Use a timestamp that is clearly within the threshold (10 seconds ago)
-	recentTime := time.Now().Add(-10 * time.Second).Format("2006-01-02 15:04:05")
+	recentTime := ic.FirewallTimestampCutoff(time.Now().Add(-10 * time.Second))
 
 	_, _ = database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual, last_heartbeat) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"online-peer", "10.0.0.1", "key1", "hmac1", "linux", 0, recentTime)
 
 	// Use a timestamp that is clearly outside the threshold (5 minutes ago)
-	oldTime := time.Now().Add(-5 * time.Minute).Format("2006-01-02 15:04:05")
+	oldTime := ic.FirewallTimestampCutoff(time.Now().Add(-5 * time.Minute))
 	_, _ = database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual, last_heartbeat) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"offline-peer", "10.0.0.2", "key2", "hmac2", "linux", 0, oldTime)
 
@@ -187,15 +182,15 @@ func TestDashboardQueries_WithBlockedEvents(t *testing.T) {
 	now := time.Now()
 
 	// Recent timestamps - within last hour (use 30 min ago to ensure within threshold)
-	recent1 := now.Add(-30 * time.Minute).Format("2006-01-02 15:04:05")
-	recent2 := now.Add(-45 * time.Minute).Format("2006-01-02 15:04:05")
+	recent1 := ic.FirewallTimestampCutoff(now.Add(-30 * time.Minute))
+	recent2 := ic.FirewallTimestampCutoff(now.Add(-45 * time.Minute))
 
 	// Older timestamps - within 24h but not within 1h
-	threeHoursAgo := now.Add(-3 * time.Hour).Format("2006-01-02 15:04:05")
-	twelveHoursAgo := now.Add(-12 * time.Hour).Format("2006-01-02 15:04:05")
+	threeHoursAgo := ic.FirewallTimestampCutoff(now.Add(-3 * time.Hour))
+	twelveHoursAgo := ic.FirewallTimestampCutoff(now.Add(-12 * time.Hour))
 
 	// Very old - outside 24h (use 48 hours to be safe)
-	twoDaysAgo := now.Add(-48 * time.Hour).Format("2006-01-02 15:04:05")
+	twoDaysAgo := ic.FirewallTimestampCutoff(now.Add(-48 * time.Hour))
 
 	// 2 blocks in last hour from same IP (insert into logs DB with logs schema)
 	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -219,19 +214,13 @@ func TestDashboardQueries_WithBlockedEvents(t *testing.T) {
 	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"1", "peer1", recent1, "192.168.1.500", "10.0.0.1", "tcp", "ACCEPT")
 
-	// Run blocked counts query - wait a bit for time-based queries
+	// Run blocked counts through the production store, which owns the
+	// canonical UTC window bounds.
 	time.Sleep(100 * time.Millisecond)
 
-	var blockedLastHour, blockedLast24h int
-	err := logsDB.QueryRow(`
-		SELECT
-		COALESCE(SUM(CASE WHEN timestamp > datetime('now', '-1 hour') THEN 1 ELSE 0 END), 0) as blocked_last_hour,
-		COUNT(*) as blocked_last_24h
-		FROM firewall_logs
-		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
-	`).Scan(&blockedLastHour, &blockedLast24h)
+	blockedLastHour, blockedLast24h, err := store.NewDashboardStore(database, logsDB).GetBlockedCounts(context.Background())
 	if err != nil {
-		t.Fatalf("blocked query failed: %v", err)
+		t.Fatalf("blocked counts query failed: %v", err)
 	}
 
 	// blocked_last_24h should be 4 (excluding old 2-days-ago entry)
@@ -239,8 +228,10 @@ func TestDashboardQueries_WithBlockedEvents(t *testing.T) {
 		t.Errorf("expected blocked_last_24h to be 4, got %d", blockedLast24h)
 	}
 
-	// blockedLastHour may vary based on exact timing - just log it
-	t.Logf("blockedLastHour=%d (may vary based on timing)", blockedLastHour)
+	// Both 30- and 45-minute-old rows fall inside the last-hour window.
+	if blockedLastHour != 2 {
+		t.Errorf("expected blocked_last_hour to be 2, got %d", blockedLastHour)
+	}
 
 	// Run recent activity query - this returns the last 5 DROP events regardless of age
 	// So we should expect 5 (since we have 5 DROP events total)
@@ -271,26 +262,11 @@ func TestDashboardQueries_WithBlockedEvents(t *testing.T) {
 		t.Errorf("expected 5 recent activity items (last 5 DROP events), got %d", len(activities))
 	}
 
-	// Run top blocked sources query
-	topRows, err := logsDB.Query(`
-		SELECT source_ip, COUNT(*) as count
-		FROM firewall_logs
-		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
-		GROUP BY source_ip
-		ORDER BY count DESC
-		LIMIT 5`)
+	// Run top blocked sources through the production store's canonical 24-hour
+	// bound.
+	blockedIPs, err := store.NewDashboardStore(database, logsDB).GetTopBlockedSources(context.Background(), 5)
 	if err != nil {
 		t.Fatalf("top blocked query failed: %v", err)
-	}
-	defer func() { _ = topRows.Close() }()
-
-	var blockedIPs []models.BlockedIP
-	for topRows.Next() {
-		var b models.BlockedIP
-		if err := topRows.Scan(&b.SrcIP, &b.Count); err != nil {
-			t.Fatalf("scan failed: %v", err)
-		}
-		blockedIPs = append(blockedIPs, b)
 	}
 
 	// Should have 3 distinct IPs in last 24h
@@ -357,7 +333,7 @@ func TestDashboardQueries_ManyBlockedEvents(t *testing.T) {
 
 	now := time.Now()
 	for i := 0; i < 10; i++ {
-		ts := now.Add(-time.Duration(i) * time.Minute).Format("2006-01-02 15:04:05")
+		ts := ic.FirewallTimestampCutoff(now.Add(-time.Duration(i) * time.Minute))
 		logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			"1", "peer1", ts, "192.168.1.1", "10.0.0.1", "tcp", "DROP")
 	}
@@ -365,15 +341,11 @@ func TestDashboardQueries_ManyBlockedEvents(t *testing.T) {
 	// Wait for time-based queries
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify blocked_last_24h count (should be 10)
-	var blockedLast24h int
-	err := logsDB.QueryRow(`
-		SELECT COUNT(*) as blocked_last_24h
-		FROM firewall_logs
-		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
-	`).Scan(&blockedLast24h)
+	// Verify blocked_last_24h count through the production store's canonical
+	// 24-hour bound (should be 10).
+	_, blockedLast24h, err := store.NewDashboardStore(database, logsDB).GetBlockedCounts(context.Background())
 	if err != nil {
-		t.Fatalf("blocked query failed: %v", err)
+		t.Fatalf("blocked counts query failed: %v", err)
 	}
 
 	// Should have 10 entries (all within 24h)
@@ -402,26 +374,11 @@ func TestDashboardQueries_ManyBlockedEvents(t *testing.T) {
 		t.Errorf("expected 5 recent activity items (LIMIT 5), got %d", count)
 	}
 
-	// Verify top blocked sources
-	topRows, err := logsDB.Query(`
-		SELECT source_ip, COUNT(*) as count
-		FROM firewall_logs
-		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
-		GROUP BY source_ip
-		ORDER BY count DESC
-		LIMIT 5`)
+	// Verify top blocked sources through the production store's canonical
+	// 24-hour bound.
+	blockedIPs, err := store.NewDashboardStore(database, logsDB).GetTopBlockedSources(context.Background(), 5)
 	if err != nil {
 		t.Fatalf("top blocked query failed: %v", err)
-	}
-	defer func() { _ = topRows.Close() }()
-
-	var blockedIPs []models.BlockedIP
-	for topRows.Next() {
-		var b models.BlockedIP
-		if err := topRows.Scan(&b.SrcIP, &b.Count); err != nil {
-			t.Fatalf("scan failed: %v", err)
-		}
-		blockedIPs = append(blockedIPs, b)
 	}
 
 	if len(blockedIPs) != 1 {
@@ -536,11 +493,11 @@ func TestHandleDashboard_WithPeers(t *testing.T) {
 	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	recentTime := time.Now().Add(-10 * time.Second).Format("2006-01-02 15:04:05")
+	recentTime := ic.FirewallTimestampCutoff(time.Now().Add(-10 * time.Second))
 	db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual, last_heartbeat) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"online-peer", "10.0.0.1", "key1", "hmac1", "linux", 0, recentTime)
 
-	oldTime := time.Now().Add(-5 * time.Minute).Format("2006-01-02 15:04:05")
+	oldTime := ic.FirewallTimestampCutoff(time.Now().Add(-5 * time.Minute))
 	db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual, last_heartbeat) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"offline-peer", "10.0.0.2", "key2", "hmac2", "linux", 0, oldTime)
 
@@ -603,12 +560,12 @@ func TestHandleDashboard_WithBlockedEvents(t *testing.T) {
 	now := time.Now()
 
 	// Recent timestamps - within last hour
-	recent1 := now.Add(-30 * time.Minute).Format("2006-01-02 15:04:05")
-	recent2 := now.Add(-45 * time.Minute).Format("2006-01-02 15:04:05")
+	recent1 := ic.FirewallTimestampCutoff(now.Add(-30 * time.Minute))
+	recent2 := ic.FirewallTimestampCutoff(now.Add(-45 * time.Minute))
 
 	// Older timestamps - within 24h but not within 1h
-	threeHoursAgo := now.Add(-3 * time.Hour).Format("2006-01-02 15:04:05")
-	twelveHoursAgo := now.Add(-12 * time.Hour).Format("2006-01-02 15:04:05")
+	threeHoursAgo := ic.FirewallTimestampCutoff(now.Add(-3 * time.Hour))
+	twelveHoursAgo := ic.FirewallTimestampCutoff(now.Add(-12 * time.Hour))
 
 	// 2 blocks in last hour from same IP (insert into logs DB with logs schema)
 	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -649,10 +606,9 @@ func TestHandleDashboard_WithBlockedEvents(t *testing.T) {
 		t.Errorf("expected blocked_last_24h to be 4, got %v", data["blocked_last_24h"])
 	}
 
-	// blocked_last_hour may vary but should be 2
-	blockedHour := data["blocked_last_hour"].(float64)
-	if blockedHour != 2 {
-		t.Logf("Note: blocked_last_hour is %v (may vary based on timing)", blockedHour)
+	// Only the 30- and 45-minute-old rows fall inside the last-hour window.
+	if data["blocked_last_hour"].(float64) != 2 {
+		t.Errorf("expected blocked_last_hour to be 2, got %v", data["blocked_last_hour"])
 	}
 
 	// Verify top_blocked_sources
@@ -676,6 +632,69 @@ func TestHandleDashboard_WithBlockedEvents(t *testing.T) {
 	activity := data["recent_activity"].([]interface{})
 	if len(activity) == 0 {
 		t.Error("expected recent_activity to have entries")
+	}
+}
+
+func TestHandleDashboard_BlockedCountsCanonicalBounds(t *testing.T) {
+	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+	defer cleanup()
+
+	now := time.Now()
+	insertLog := func(offset time.Duration, srcIP, action string) {
+		t.Helper()
+		if _, err := logsDB.Exec(
+			`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			"1", "peer1", ic.FirewallTimestampCutoff(now.Add(offset)), srcIP, "10.0.0.1", "tcp", action); err != nil {
+			t.Fatalf("seed firewall log: %v", err)
+		}
+	}
+
+	// Two blocks inside the last hour from the same source.
+	insertLog(-30*time.Minute, "10.1.1.1", "DROP")
+	insertLog(-45*time.Minute, "10.1.1.1", "DROP")
+	// One block outside the last hour but inside 24 hours.
+	insertLog(-90*time.Minute, "10.1.1.2", "DROP")
+	// One block near the far edge of the 24-hour window.
+	insertLog(-23*time.Hour, "10.1.1.3", "DROP")
+	// One block beyond the 24-hour window: excluded from every blocked window
+	// and from the top-source list.
+	insertLog(-25*time.Hour, "10.1.1.4", "DROP")
+	// Non-blocked traffic inside the window: excluded by the DROP filter.
+	insertLog(-30*time.Minute, "10.1.1.5", "ACCEPT")
+
+	handler := NewHandler(store.NewDashboardStore(db, logsDB))
+
+	req := httptest.NewRequest("GET", "/dashboard", nil)
+	w := httptest.NewRecorder()
+	handler.HandleDashboard(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse JSON response: %v", err)
+	}
+	data := resp["data"].(map[string]interface{})
+
+	if got := data["blocked_last_hour"].(float64); got != 2 {
+		t.Errorf("expected blocked_last_hour=2, got %v", got)
+	}
+	if got := data["blocked_last_24h"].(float64); got != 4 {
+		t.Errorf("expected blocked_last_24h=4, got %v", got)
+	}
+
+	topBlocked := data["top_blocked_sources"].([]interface{})
+	if len(topBlocked) != 3 {
+		t.Fatalf("expected 3 top blocked sources, got %d", len(topBlocked))
+	}
+	first := topBlocked[0].(map[string]interface{})
+	if first["src_ip"].(string) != "10.1.1.1" {
+		t.Errorf("expected top blocked source to be 10.1.1.1, got %v", first["src_ip"])
+	}
+	if first["count"].(float64) != 2 {
+		t.Errorf("expected top blocked count to be 2, got %v", first["count"])
 	}
 }
 

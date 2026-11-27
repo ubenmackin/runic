@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"runic/internal/auth"
+	runiccommon "runic/internal/common"
 	"runic/internal/store"
 	"runic/internal/testutil"
 )
@@ -23,6 +24,22 @@ func (m *mockTokenRevoker) IsTokenRevoked(_ context.Context, _ string) (bool, er
 // Ensure mockTokenRevoker satisfies TokenRevoker interface.
 var _ TokenRevoker = (*mockTokenRevoker)(nil)
 
+// useTestSigningKey installs a non-empty JWT signing key for tests that
+// generate and validate access tokens; ValidateToken fails closed when the
+// process-global key is unset.
+func useTestSigningKey(t *testing.T) {
+	t.Helper()
+	auth.JwtKeyMu.Lock()
+	previous := auth.JwtKey
+	auth.JwtKey = []byte("logs-websocket-test-signing-key-0123456789")
+	auth.JwtKeyMu.Unlock()
+	t.Cleanup(func() {
+		auth.JwtKeyMu.Lock()
+		auth.JwtKey = previous
+		auth.JwtKeyMu.Unlock()
+	})
+}
+
 // =============================================================================
 // GetLogs Tests
 // =============================================================================
@@ -35,9 +52,9 @@ func TestGetLogs(t *testing.T) {
 		"peer1", "10.0.0.1", "key1", "hmac1", "linux", 0)
 
 	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"1", "peer1", time.Now(), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
+		"1", "peer1", runiccommon.FirewallTimestampCutoff(time.Now()), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
 	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"1", "peer1", time.Now(), "outbound", "10.0.0.1", "192.168.1.100", "tcp", 22, 54321, "ACCEPT")
+		"1", "peer1", runiccommon.FirewallTimestampCutoff(time.Now()), "outbound", "10.0.0.1", "192.168.1.100", "tcp", 22, 54321, "ACCEPT")
 
 	tests := []struct {
 		name           string
@@ -133,7 +150,7 @@ func TestGetLogs(t *testing.T) {
 		},
 		{
 			name:        "filter by from time",
-			queryParams: "from=" + time.Now().Add(-24*time.Hour).Format(time.RFC3339),
+			queryParams: "from=" + time.Now().UTC().Add(-24*time.Hour).Format(time.RFC3339),
 			wantCode:    http.StatusOK,
 			validateResult: func(t *testing.T, result map[string]interface{}) {
 				total, ok := result["total"].(float64)
@@ -143,6 +160,21 @@ func TestGetLogs(t *testing.T) {
 				// Should return logs since we're looking back 24 hours
 				if total < 2 {
 					t.Errorf("expected total >= 2 for from filter, got %f", total)
+				}
+			},
+		},
+		{
+			name:        "filter by to time",
+			queryParams: "to=" + time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+			wantCode:    http.StatusOK,
+			validateResult: func(t *testing.T, result map[string]interface{}) {
+				total, ok := result["total"].(float64)
+				if !ok {
+					t.Fatal("expected total to be a number")
+				}
+				// Both seeded logs are earlier than the upper bound.
+				if total < 2 {
+					t.Errorf("expected total >= 2 for to filter, got %f", total)
 				}
 			},
 		},
@@ -269,6 +301,116 @@ func TestGetLogs(t *testing.T) {
 	}
 }
 
+func TestHandleLogs_FromToExcludesOutOfWindow(t *testing.T) {
+	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+	defer cleanup()
+
+	// Anchor the window at midday so the out-of-window rows share the date with
+	// the query bounds; the exclusion then depends on the canonical time-of-day
+	// comparison instead of the date prefix.
+	now := time.Now().UTC()
+	base := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.UTC)
+
+	seed := []struct {
+		srcIP  string
+		offset time.Duration
+	}{
+		{"10.2.0.1", 0},              // inside both bounds
+		{"10.2.0.2", -2 * time.Hour}, // before the from bound
+		{"10.2.0.3", 2 * time.Hour},  // after the to bound
+	}
+	for _, row := range seed {
+		if _, err := logsDB.Exec(
+			`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			"1", "peer1", runiccommon.FirewallTimestampCutoff(base.Add(row.offset)),
+			"inbound", row.srcIP, "10.0.0.1", "tcp", 54321, 22, "ACCEPT"); err != nil {
+			t.Fatalf("seed firewall log: %v", err)
+		}
+	}
+
+	from := base.Add(-time.Hour).Format(time.RFC3339)
+	to := base.Add(time.Hour).Format(time.RFC3339)
+
+	tests := []struct {
+		name        string
+		queryParams string
+		wantTotal   float64
+		wantPresent []string
+		wantAbsent  []string
+	}{
+		{
+			name:        "from bound excludes earlier same-day row",
+			queryParams: "from=" + from,
+			wantTotal:   2,
+			wantPresent: []string{"10.2.0.1", "10.2.0.3"},
+			wantAbsent:  []string{"10.2.0.2"},
+		},
+		{
+			name:        "to bound excludes later same-day row",
+			queryParams: "to=" + to,
+			wantTotal:   2,
+			wantPresent: []string{"10.2.0.1", "10.2.0.2"},
+			wantAbsent:  []string{"10.2.0.3"},
+		},
+		{
+			name:        "combined bounds keep only the in-window row",
+			queryParams: "from=" + from + "&to=" + to,
+			wantTotal:   1,
+			wantPresent: []string{"10.2.0.1"},
+			wantAbsent:  []string{"10.2.0.2", "10.2.0.3"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := NewHandler(store.NewLogsStore(logsDB), store.NewTokenStore(database))
+			req := httptest.NewRequest("GET", "/api/v1/logs?"+tt.queryParams, nil)
+			w := httptest.NewRecorder()
+
+			h.GetLogs(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+			}
+
+			var result map[string]interface{}
+			if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+				t.Fatalf("failed to decode response: %v", err)
+			}
+
+			total, ok := result["total"].(float64)
+			if !ok {
+				t.Fatal("expected total to be a number")
+			}
+			if total != tt.wantTotal {
+				t.Errorf("expected total=%v, got %v", tt.wantTotal, total)
+			}
+
+			seen := make(map[string]bool)
+			logs, _ := result["logs"].([]interface{})
+			for _, entry := range logs {
+				m, ok := entry.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if src, ok := m["src_ip"].(string); ok {
+					seen[src] = true
+				}
+			}
+			for _, src := range tt.wantPresent {
+				if !seen[src] {
+					t.Errorf("expected source %s inside the window", src)
+				}
+			}
+			for _, src := range tt.wantAbsent {
+				if seen[src] {
+					t.Errorf("expected source %s outside the window to be excluded", src)
+				}
+			}
+		})
+	}
+}
+
 func TestGetLogs_EmptyResult(t *testing.T) {
 	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
@@ -321,7 +463,7 @@ func TestGetLogs_WithHostname(t *testing.T) {
 		"peer1", "10.0.0.1", "key1", "hmac1", "linux", 0)
 
 	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"1", "peer1", time.Now(), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
+		"1", "peer1", runiccommon.FirewallTimestampCutoff(time.Now()), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
 
 	h := NewHandler(store.NewLogsStore(logsDB), store.NewTokenStore(database))
 	req := httptest.NewRequest("GET", "/api/v1/logs", nil)
@@ -359,7 +501,7 @@ func TestGetLogs_OrphanedLogs(t *testing.T) {
 	defer cleanup()
 
 	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"999", "", time.Now(), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
+		"999", "", runiccommon.FirewallTimestampCutoff(time.Now()), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
 
 	h := NewHandler(store.NewLogsStore(logsDB), store.NewTokenStore(database))
 	req := httptest.NewRequest("GET", "/api/v1/logs", nil)
@@ -464,7 +606,58 @@ func TestMakeLogsStreamHandler_InvalidToken(t *testing.T) {
 	}
 }
 
+func TestMakeLogsStreamHandler_RejectsNonAccessTokenTypes(t *testing.T) {
+	useTestSigningKey(t)
+
+	tests := []struct {
+		name      string
+		tokenType string
+	}{
+		{"refresh token", auth.TokenTypeRefresh},
+		{"empty token type", ""},
+		{"unknown token type", "session"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token, err := auth.GenerateToken("test-user", "viewer", tt.tokenType, 24*time.Hour)
+			if err != nil {
+				t.Fatalf("failed to generate token: %v", err)
+			}
+
+			t.Run("cookie", func(t *testing.T) {
+				handler := MakeLogsStreamHandler(NewHub(), &mockTokenRevoker{})
+
+				req := httptest.NewRequest("GET", "/api/v1/logs/ws", nil)
+				req.AddCookie(&http.Cookie{Name: "runic_access_token", Value: token})
+				w := httptest.NewRecorder()
+
+				handler(w, req)
+
+				if w.Code != http.StatusUnauthorized {
+					t.Errorf("expected status %d, got %d: %s", http.StatusUnauthorized, w.Code, w.Body.String())
+				}
+			})
+
+			t.Run("sec-websocket-protocol", func(t *testing.T) {
+				handler := MakeLogsStreamHandler(NewHub(), &mockTokenRevoker{})
+
+				req := httptest.NewRequest("GET", "/api/v1/logs/ws", nil)
+				req.Header.Set("Sec-WebSocket-Protocol", token)
+				w := httptest.NewRecorder()
+
+				handler(w, req)
+
+				if w.Code != http.StatusUnauthorized {
+					t.Errorf("expected status %d, got %d: %s", http.StatusUnauthorized, w.Code, w.Body.String())
+				}
+			})
+		})
+	}
+}
+
 func TestMakeLogsStreamHandler_ValidToken_WithFilters(t *testing.T) {
+	useTestSigningKey(t)
 	hub := NewHub()
 	handler := MakeLogsStreamHandler(hub, &mockTokenRevoker{})
 
@@ -489,6 +682,7 @@ func TestMakeLogsStreamHandler_ValidToken_WithFilters(t *testing.T) {
 }
 
 func TestMakeLogsStreamHandler_ValidToken_HeaderAuth(t *testing.T) {
+	useTestSigningKey(t)
 	hub := NewHub()
 	handler := MakeLogsStreamHandler(hub, &mockTokenRevoker{})
 

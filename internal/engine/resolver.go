@@ -360,12 +360,17 @@ func ValidateIPSetName(fullName string) error {
 	return nil
 }
 
-// Rules: lowercase, replace all non-alphanumeric characters (except underscore) with underscore,
-// collapse multiple underscores into one, enforce the Linux 32-character ipset name limit
-// (truncating from the right), then trim leading/trailing underscores so a cut on an underscore
-// is cleaned up before the name is returned. The Linux kernel limits ipset names to 32
-// characters including any prefix like "runic_group_".
-func sanitizeForIpset(name string) string {
+// sanitizeForIpset returns a sanitized name segment. The optional maxLen
+// bounds the segment length; the default of 20 leaves room for the
+// "runic_group_" prefix within the Linux kernel's 32-character ipset name
+// limit. Callers that append a uniqueness suffix pass the remaining length
+// budget so the final ipset name stays within the kernel limit.
+func sanitizeForIpset(name string, maxLen ...int) string {
+	limit := 20
+	if len(maxLen) > 0 {
+		limit = maxLen[0]
+	}
+
 	name = strings.ToLower(name)
 	var b strings.Builder
 	prevUnderscore := false
@@ -380,16 +385,16 @@ func sanitizeForIpset(name string) string {
 	}
 	result := b.String()
 
-	// Enforce 32-character Linux kernel ipset name limit.
-	// The "runic_group_" prefix takes 12 characters, leaving 20 for the group name.
-	// Truncate from the right to preserve the most meaningful part. Truncation is
-	// applied BEFORE the final trim so that a cut on an underscore gets cleaned up.
-	if len(result) > 20 {
-		result = result[:20]
+	// Truncate BEFORE the final trim so a cut on an underscore is cleaned up.
+	if limit < 0 {
+		limit = 0
+	}
+	if len(result) > limit {
+		result = result[:limit]
 	}
 
 	// Trim AFTER truncation so any trailing underscore introduced by the slice
-	// is removed (e.g., "group_a_very_long_name" → "group_a_very_long" → "group_a_very_long").
+	// is removed (e.g., "group_a_very_long_name" → "group_a_very_long").
 	result = strings.Trim(result, "_")
 
 	return result

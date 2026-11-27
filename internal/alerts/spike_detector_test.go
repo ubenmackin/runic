@@ -2,16 +2,19 @@
 package alerts
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 	"time"
 
+	"runic/internal/common"
+	"runic/internal/db"
 	"runic/internal/testutil"
 )
 
 func insertFirewallLogs(t *testing.T, db *sql.DB, count int, peerID int) {
 	t.Helper()
-	now := time.Now().UTC().Format("2006-01-02 15:04:05")
+	now := common.FirewallTimestampCutoff(time.Now())
 	for i := 0; i < count; i++ {
 		_, err := db.Exec(`
 			INSERT INTO firewall_logs (timestamp, peer_id, peer_hostname, event_type, source_ip, dest_ip, source_port, dest_port, protocol, action, details)
@@ -25,7 +28,7 @@ func insertFirewallLogs(t *testing.T, db *sql.DB, count int, peerID int) {
 
 func insertFirewallLogsWithTimestamp(t *testing.T, db *sql.DB, count int, peerID int, timestamp time.Time) {
 	t.Helper()
-	ts := timestamp.UTC().Format("2006-01-02 15:04:05")
+	ts := common.FirewallTimestampCutoff(timestamp)
 	for i := 0; i < count; i++ {
 		_, err := db.Exec(`
 			INSERT INTO firewall_logs (timestamp, peer_id, peer_hostname, event_type, source_ip, dest_ip, source_port, dest_port, protocol, action, details)
@@ -39,7 +42,7 @@ func insertFirewallLogsWithTimestamp(t *testing.T, db *sql.DB, count int, peerID
 
 func countDropEvents(t *testing.T, db *sql.DB, windowMinutes int) int {
 	t.Helper()
-	cutoff := time.Now().Add(-time.Duration(windowMinutes) * time.Minute).UTC().Format("2006-01-02 15:04:05")
+	cutoff := common.FirewallTimestampCutoff(time.Now().Add(-time.Duration(windowMinutes) * time.Minute))
 	var count int
 	err := db.QueryRow(`
 		SELECT COUNT(*)
@@ -282,6 +285,41 @@ func TestSpikeDetection_WindowFilter(t *testing.T) {
 	spikeDetected := countNew >= detector.threshold
 	if !spikeDetected {
 		t.Error("expected spike to be detected for recent logs inside window")
+	}
+}
+
+// TestSpikeDetection_LegacyTimestampsAfterMigration verifies that the detector
+// windows operate on canonical timestamps after the logs backfill. Raw RFC3339
+// rows sort after canonical bounds because 'T' sorts after ' ', so they must be
+// rewritten before they can age out of the window.
+func TestSpikeDetection_LegacyTimestampsAfterMigration(t *testing.T) {
+	logsDB, cleanup := testutil.SetupTestLogsDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	legacyTimestamp := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	for i := 0; i < 20; i++ {
+		_, err := logsDB.Exec(`
+			INSERT INTO firewall_logs (timestamp, peer_id, peer_hostname, event_type, source_ip, dest_ip, source_port, dest_port, protocol, action, details)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, legacyTimestamp, 1, "test-peer", "DROP", "192.168.1.100", "10.0.0.1", 12345, 80, "TCP", "DROP", "legacy timestamp")
+		if err != nil {
+			t.Fatalf("failed to insert legacy firewall log: %v", err)
+		}
+	}
+
+	if _, _, err := db.MigrateFirewallLogTimestamps(ctx, logsDB); err != nil {
+		t.Fatalf("failed to migrate firewall log timestamps: %v", err)
+	}
+
+	if count := countDropEvents(t, logsDB, 5); count != 0 {
+		t.Errorf("expected 0 logs in 5-minute window after migrating aged-out rows, got %d", count)
+	}
+
+	insertFirewallLogs(t, logsDB, 10, 1)
+
+	if count := countDropEvents(t, logsDB, 5); count != 10 {
+		t.Errorf("expected 10 recent logs in 5-minute window, got %d", count)
 	}
 }
 
